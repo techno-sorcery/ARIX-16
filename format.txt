@@ -1,0 +1,13 @@
+Instruction format
+
+        | OP | SEL  |    | SRC  | DEST |
+ALU     | 00 | xxxx | xx | xxxx | xxxx |
+
+        | OP | IHR | TWR | IMM       | DEST |
+IMM     | 01 | x   | x   | xxxx xxxx | xxxx |
+
+        | OP | RD  | RW  | SRC  | DEST |
+MOV     | 10 | xxx | xxx | xxxx | xxxx |
+
+        | OP | CON | OFFSET        |
+BRA     | 11 | xxx | xxx xxxx xxxx |
