@@ -11,3 +11,31 @@ MOV     | 10 | xxx | xxx | xxxx | xxxx |
 
         | OP | CON | OFFSET        |
 BRA     | 11 | xxx | xxx xxxx xxxx |
+
+
+Registers
+
+Bank 0
+r0      a0      Argument/Return value
+r1      a1      Argument/Return value
+r2      a2      Argument/Return value
+r3      a3      Argument/Return value
+
+r4      t0      Temp register
+r5      t1      Temp register
+
+r6      v0      Local variable
+r7      v1      Local variable
+r8      v2      Local variable
+r9      v3      Local variable
+r10     v4      Local variable
+r11     v5      Local variable
+r12     v6      Local variable
+
+r13     lr      Link register
+r14     fp      Frame pointer
+r15     sp      Stack pointer
+
+Bank 1
+PC      Program counter
+IV      Interrupt vector
