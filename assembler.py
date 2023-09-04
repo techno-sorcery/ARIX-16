@@ -1,9 +1,11 @@
 # ARIX-16 Cross Assembler
 # Written by Hayden Buscher, 2023
 
-import re
+# import re
 import os
+import math
 
+# Constants
 op_alu = { "inc":"00000100", "dec":"00001000", "add":"00001100", "adc":"00010000", "sub":"00010100",
            "sbb":"00011000", "and":"00011100", "or":"00100000",  "xor":"00100100", "not":"00101000",
            "lsh":"00101100", "lrt":"00110000" }
@@ -23,10 +25,17 @@ op_regs = { "r0":"0000",  "r1":"0001",  "r2":"0010",  "r3":"0011",
             "v2":"1000", "v3":"1001", "v4":"1010", "v5":"1011", 
             "v6":"1100", "lr":"1101", "fp":"1110", "sp":"1111" }
 
-error_msg = [ "Instruction called without arguments", "Invalid register called" ]
+dir_def = [".byte", ".word", ".double", ".quad"]
+dir_res = [".resb", ".resw", ".resd", "resq"]
+dir_misc = [".org",".seg", ".equ", ".rep"]
 
+error_msg = [ "Too few arguments", "Invalid register", "Invalid argument",
+              "Oversized argument", "Invalid label name", "Duplicate label"]
+
+
+# Variables
 labels = {}
-linenum=0
+linenum = 0
 
 
 # File management
@@ -34,16 +43,155 @@ path = "test.asm"
 
 def main():
     with open (path) as file:
+
+        # First pass, generate symbol table
         for line in file:
 
             # Remove leading/trailing spaces and comments
-            line = line.replace("\\;","acasm16-placeholder=semicolon")
+            line = line.replace("\;","a16-placeholder=semicolon")
             line = line.strip().split(';', 1)[0]
-            line = line.replace("acasm16-placeholder=semicolon",";")
+            line = line.replace("a16-placeholder=semicolon",";")
             
             # Don't parse if empty
             if len(line) != 0:
-                parse_op(line)
+                parse_label(line)
+
+
+# Parse labels
+def parse_label(line) -> None:
+    global labels
+    global linenum
+
+    # Remove leading/trailing spaces, and split
+    line = line.strip().split(' ',1)
+    line[0] = line[0].lower()
+
+    # Increment line num if instruction
+    if line[0] in op_alu or line[0] in op_imm or line[0] in op_mov or line[0] in op_bra:
+        linenum += 1
+
+    # Parse directives
+    elif line[0] in directives:
+        parse_directive(line) 
+
+    else:
+
+        print(line[0] + " : " + str(linenum))
+
+        # Check if valid, non-duplicate label
+        if not line[0][0].isalpha():
+            error(4,line[0])
+            exit()
+
+        if line[0] in labels:
+            error(5,line[0])
+            exit()
+
+        # Add label to symbol table
+        labels[line[0]] = linenum
+
+        # Continue parsing if more commands
+        if len(line) > 1:
+            parse_label(line[1])
+
+
+# Parse directives
+def parse_directive(line) -> None:
+    global labels
+    global linenum
+
+    # Check if directive has arguments
+    if len(line) > 1:
+        line[1] = line[1].strip()
+
+        if line[0] == ".org":
+            linenum = parse_val(line[1], 16)[1]
+
+        elif line[0] == ".word" or line[0] == ".byte":
+            vals = parse_def(line[1], line[0])
+            linenum += len(vals)
+
+        elif line[0] == ".res":
+            linenum += parse_val(line[1], 16)[1]
+
+        elif line[0] == "equ":
+            
+        
+        
+    else:
+        error(0, line[0])
+        exit()
+
+    print(linenum)
+
+# Parse resb and resw
+# def parse_res(line, )
+
+# Parse dw and db args
+def parse_def(line, form: str) -> list:
+        vals = []
+        byte_low = True
+
+        # Split and strip arguments
+        line = line.split(',')
+
+        # Iterate through args
+        for arg in line:
+            arg = arg.strip()
+
+            # Parse string
+            if arg.startswith("\"") and arg.endswith("\""):
+                for char in arg[1:-1]:
+
+                    # Define byte
+                    if form == ".byte":
+
+                        # Low byte
+                        if byte_low:
+                            vals.append(format(ord(char), "08b"))
+                            
+                        # High byte
+                        else:
+                            vals[len(vals)-1] = vals[len(vals)-1] + (format(ord(char), "08b"))
+
+                        byte_low = not byte_low
+                        
+                    # Define word
+                    else:
+                        vals.append(format(ord(char), "016b"))
+
+                    # Throw error if too long
+                    if(len(vals[len(vals)-1]) > 16):
+                        error(3, arg)
+                        exit();
+                
+                # # Null terminator
+                # if (byte_low and form == ".byte") or form == "dw":
+                #     vals.append(0)
+
+                # byte_low = True
+
+            # Parse numbers
+            else:
+
+                # Define byte
+                if form == ".byte":
+
+                    # Low byte
+                    if byte_low:
+                        vals.append(parse_val(arg, 8))
+                    
+                    # High byte
+                    else:
+                        vals[len(vals)-1] = vals[len(vals)-1] + parse_val(arg, 8)
+
+                    byte_low = not byte_low
+
+                # Define word
+                else:
+                    vals.append(parse_val(arg, 16))
+
+        return vals
 
 
 # Parse opcodes
@@ -59,23 +207,19 @@ def parse_op(line):
     
     # ALU instructions
     if line_op in op_alu:
-        op_word = op_alu[line_op] + parse_alu(line)
-        print(op_word)
+        op_word = op_alu[line_op] + parse_args(line, "ALU")
 
     # IMM instructions
     elif line_op in op_imm:
-        op_word = op_imm[line_op]
-        # parse_params(line)
+        op_word = op_imm[line_op] + parse_args(line, "IMM")
 
     # MOV instructions
     elif line_op in op_mov:
-        op_word = op_mov[line_op]
-        # parse_params(line)
+        op_word = op_mov[line_op] + parse_args(line, "MOV")
 
     # BRA instructions
     elif line_op in op_bra:
-        op_word = op_bra[line_op]
-        # parse_params(line)
+        op_word = op_bra[line_op] + parse_args(line, "BRA")
 
     # Labels
     else:
@@ -85,12 +229,11 @@ def parse_op(line):
         if len(line) > 1:
             parse_op(line[1])
 
+    print(op_word)
 
-    # print(op_word)
 
-
-# Parse ALU instructions
-def parse_alu(line):
+# Parse arguments
+def parse_args(line: list, form: str) -> str:
 
     # Check if instruction has arguments
     if len(line) > 1:
@@ -102,18 +245,32 @@ def parse_alu(line):
 
         print(args)
         
-        # One argument
-        if len(args) == 1:
-            reg0 = parse_reg(args[0])
+        # Parse ALU and MOV args
+        if form == "ALU" or form == "MOV":
 
-            return(reg0 + reg0)
-        
-        # Two arguments
+            # One argument
+            if len(args) == 1:
+                return parse_reg(args[0]) + parse_reg(args[0])
+            
+            # Two arguments
+            else:
+                return parse_reg(args[0]) + parse_reg(args[1])
+
+        # Parse IMM args
+        elif form == "IMM":
+
+            # Two arguments
+            if len(args) > 1:
+                return parse_val(args[0], 8)[0] + parse_reg(args[1])
+
+            # Throw error if one argument
+            else:
+                error(0, line)
+                exit()
+
+        # Parse BRA args
         else:
-            reg0 = parse_reg(args[0])
-            reg1 = parse_reg(args[1])
-
-            return(reg0 + reg1)
+            return parse_val(args[0], 11)[0]
 
     else:
         error(0, line)
@@ -121,12 +278,38 @@ def parse_alu(line):
 
 
 # Parse register names
-def parse_reg(reg):
+def parse_reg(reg: str) -> str:
     if reg in op_regs:
         return op_regs[reg]
     else:
         error(1, reg)
         exit()
+
+
+# Parse numerical values
+def parse_val(val: str, bits: int) -> tuple:
+    val_dec = 0 
+    val_bin = "0"
+    
+    # Char
+    if (val.startswith('\'') and val.endswith('\'')) and len(val) == 3:
+        val_dec = ord(val[1])
+
+    # Number
+    else:
+        try:
+            val_dec = int(val,0)
+
+        except:
+            error(2, val)
+            exit()
+
+    # Check if too long
+    if val_dec >= 2**bits:
+        error(3, val)
+        exit()
+
+    return (format(val_dec, "0" + str(bits) + "b"), val_dec)
 
 
 # Error codes
