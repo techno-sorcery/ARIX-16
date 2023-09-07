@@ -1,4 +1,4 @@
-# ARIX-16 Cross Assembler
+# ARIX-16 Cross Assemble
 # Written by Hayden Buscher, 2023
 
 # import re
@@ -25,173 +25,224 @@ op_regs = { "r0":"0000",  "r1":"0001",  "r2":"0010",  "r3":"0011",
             "v2":"1000", "v3":"1001", "v4":"1010", "v5":"1011", 
             "v6":"1100", "lr":"1101", "fp":"1110", "sp":"1111" }
 
-dir_def = [".byte", ".word", ".double", ".quad"]
-dir_res = [".resb", ".resw", ".resd", "resq"]
-dir_misc = [".org",".seg", ".equ", ".rep"]
+dir_def = { ".byte":8, ".word":16, ".double":32, ".quad":64 }
+dir_res = { ".resb":0.5, ".resw":1, ".resd":2,  ".resq":4 }
+dir_misc = [ ".org", ".equ", ".seg" ]
 
-error_msg = [ "Too few arguments", "Invalid register", "Invalid argument",
-              "Oversized argument", "Invalid label name", "Duplicate label"]
+error_msg = [ "Too few arguments", "Invalid register", "Invalid argument", "Oversized argument", 
+              "Invalid label name", "Duplicate label", "Invalid data type" ]
 
+width = 16
+page = 2048
 
-# Variables
+# Global variables
 labels = {}
-linenum = 0
+abs_num = 0
+rel_num = 0
+line_num = 0
 
 
 # File management
 path = "test.asm"
 
 def main():
+    global labels
+    global abs_num
+    global rel_num
+    global line_num
+
     with open (path) as file:
+
+        # Reset vars
+        abs_num = 0
+        rel_num = 0
+        line_num = 0
 
         # First pass, generate symbol table
         for line in file:
 
-            # Remove leading/trailing spaces and comments
+            # Remove leading/trailing spaces and comments, and replace tabs
             line = line.replace("\;","a16-placeholder=semicolon")
-            line = line.strip().split(';', 1)[0]
-            line = line.replace("a16-placeholder=semicolon",";")
-            
-            # Don't parse if empty
+            line = line.split(';', 1)[0].strip()
+            line = line.replace("a16-placeholder=semicolon",";").expandtabs()
+
+            # Ignore if blank
             if len(line) != 0:
-                parse_label(line)
+                print(line)
+                pass_first(line)
+
+            line_num += 1
+
+        # Dump symbol table
+        dump_table(labels)
+
+
+# First pass
+def pass_first(line) -> None:
+    global rel_num
+
+    # Split line on first space, make lowercase
+    line = line.split(' ', 1)
+    op = line[0].lower()
+
+    # Increment if instruction
+    if op in op_alu or op in op_imm or op in op_mov or op in op_bra:
+        rel_num += 1
+
+    # Parse directives
+    elif op in dir_res or op in dir_def or op in dir_misc:
+
+        # Throw error if no arguments
+        if len(line) <= 1:
+            error(0, line[0])
+            exit()
+
+        rel_num = parse_dir(op, line[1].strip(), rel_num)
+
+    # Parse labels
+    else:
+        parse_label(op)
+
+        # Continue parsing if not empty
+        if len(line) > 1:
+            pass_first(line[1].strip())
 
 
 # Parse labels
-def parse_label(line) -> None:
-    global labels
-    global linenum
+def parse_label(label) -> None:
 
-    # Remove leading/trailing spaces, and split
-    line = line.strip().split(' ',1)
-    line[0] = line[0].lower()
-
-    # Increment line num if instruction
-    if line[0] in op_alu or line[0] in op_imm or line[0] in op_mov or line[0] in op_bra:
-        linenum += 1
-
-    # Parse directives
-    elif line[0] in directives:
-        parse_directive(line) 
-
-    else:
-
-        print(line[0] + " : " + str(linenum))
-
-        # Check if valid, non-duplicate label
-        if not line[0][0].isalpha():
-            error(4,line[0])
-            exit()
-
-        if line[0] in labels:
-            error(5,line[0])
-            exit()
-
-        # Add label to symbol table
-        labels[line[0]] = linenum
-
-        # Continue parsing if more commands
-        if len(line) > 1:
-            parse_label(line[1])
-
-
-# Parse directives
-def parse_directive(line) -> None:
-    global labels
-    global linenum
-
-    # Check if directive has arguments
-    if len(line) > 1:
-        line[1] = line[1].strip()
-
-        if line[0] == ".org":
-            linenum = parse_val(line[1], 16)[1]
-
-        elif line[0] == ".word" or line[0] == ".byte":
-            vals = parse_def(line[1], line[0])
-            linenum += len(vals)
-
-        elif line[0] == ".res":
-            linenum += parse_val(line[1], 16)[1]
-
-        elif line[0] == "equ":
-            
-        
-        
-    else:
-        error(0, line[0])
+    # Check if valid, non-duplicate label
+    if not label[0].isalpha():
+        error(4,label)
         exit()
 
-    print(linenum)
+    if label in labels:
+        error(5,label)
+        exit()
 
-# Parse resb and resw
-# def parse_res(line, )
+    # Add label to symbol table
+    labels[label] = [line_num, rel_num]
 
-# Parse dw and db args
-def parse_def(line, form: str) -> list:
-        vals = []
-        byte_low = True
 
-        # Split and strip arguments
-        line = line.split(',')
+# Parse directives 
+def parse_dir(op, args, rel_num) -> int:
 
-        # Iterate through args
-        for arg in line:
-            arg = arg.strip()
+    # Parse def directives
+    if op in dir_def:
+        vals = parse_def(op, args) 
 
-            # Parse string
-            if arg.startswith("\"") and arg.endswith("\""):
-                for char in arg[1:-1]:
+        # rel_num offset
+        rel_num += len(vals)
+    
+    # Parse res directives
+    elif op in dir_res:
+        arg = parse_val(args, width)[1]
 
-                    # Define byte
-                    if form == ".byte":
+        # rel_num offset
+        rel_num += int(math.ceil(dir_res[op] * arg))
 
-                        # Low byte
-                        if byte_low:
-                            vals.append(format(ord(char), "08b"))
-                            
-                        # High byte
-                        else:
-                            vals[len(vals)-1] = vals[len(vals)-1] + (format(ord(char), "08b"))
+    # Parse org directive
+    elif op == ".org":
+        rel_num = parse_val(args, width)[1]
 
-                        byte_low = not byte_low
-                        
-                    # Define word
-                    else:
-                        vals.append(format(ord(char), "016b"))
+    # Parse equ directive
+    elif op == ".equ":
+        parse_equ(args)
 
-                    # Throw error if too long
-                    if(len(vals[len(vals)-1]) > 16):
-                        error(3, arg)
-                        exit();
-                
-                # # Null terminator
-                # if (byte_low and form == ".byte") or form == "dw":
-                #     vals.append(0)
+    # Parse seg directive
+    elif op == ".seg":
+        rel_num = parse_seg(args)
 
-                # byte_low = True
+    return rel_num
 
-            # Parse numbers
-            else:
 
-                # Define byte
-                if form == ".byte":
+# Parse seg directive
+def parse_seg(args) -> int:
+    # args = args.split(',')
+    # alignment = 0
 
-                    # Low byte
-                    if byte_low:
-                        vals.append(parse_val(arg, 8))
-                    
-                    # High byte
-                    else:
-                        vals[len(vals)-1] = vals[len(vals)-1] + parse_val(arg, 8)
+    # # Throw error if no args
+    # if len(args) == 0:
+    #     error(0, args)
+    #     exit()
 
-                    byte_low = not byte_low
+    # # Two args
+    # if len(args >= 2):
 
-                # Define word
-                else:
-                    vals.append(parse_val(arg, 16))
+    #     # Set alignment
+    #     alignment = args[1]
 
-        return vals
+    # # Create label
+    # parse_label(args[0])
+    # # labels[]
+    
+    return 0
+
+
+# Parse equ directive
+def parse_equ(args) -> None:
+    args = args.split(',')
+
+    # Throw error if less than two args
+    if len(args) < 2:
+        error(0, args)
+        exit()
+
+    # Extract arguments
+    arg = parse_val(args[0].strip(), width)[1]
+    label = args[1].strip()
+
+    # Create label, and set to arg
+    parse_label(label)
+    labels[label][1] = arg
+
+
+
+# Parse def directives
+def parse_def(op: str, args) -> list:
+    vals = []
+    bits = dir_def[op]
+
+    # Split and strip arguments
+    args = args.split(',')
+
+    # Iterate through args
+    for arg in args:
+        arg = arg.strip()
+
+        # Parse string
+        if arg.startswith("\"") and arg.endswith("\""):
+            for char in arg[1:-1]:
+                vals = def_words(format(ord(char), "0" + str(bits) + "b"), vals, bits)
+
+        # Parse numbers
+        else:
+            vals = def_words(parse_val(arg, bits)[0], vals, bits)
+
+    return vals
+
+
+# Split words for def 
+def def_words(val, vals, bits):
+    len_vals = len(vals)-1
+
+    # Byte, or less
+    if bits <= width / 2:
+
+        # High byte
+        if len(vals) >= 1 and len(vals[len_vals]) <= bits:
+            vals[len_vals] = vals[len_vals] + str(val)
+        # Low byte
+        else:
+            vals.append(val)
+
+    # Word or greater
+    else:
+        for i in range(math.ceil(bits/width)):
+            vals.append(val[:width])
+            val = val[width:]
+
+    return vals
 
 
 # Parse opcodes
@@ -232,49 +283,47 @@ def parse_op(line):
     print(op_word)
 
 
-# Parse arguments
+# Parse opcode arguments
 def parse_args(line: list, form: str) -> str:
 
-    # Check if instruction has arguments
-    if len(line) > 1:
-
-        # Split and strip arguments
-        args = line[1].split(',',1)
-        for i in range(len(args)):
-            args[i] = args[i].strip()
-
-        print(args)
-        
-        # Parse ALU and MOV args
-        if form == "ALU" or form == "MOV":
-
-            # One argument
-            if len(args) == 1:
-                return parse_reg(args[0]) + parse_reg(args[0])
-            
-            # Two arguments
-            else:
-                return parse_reg(args[0]) + parse_reg(args[1])
-
-        # Parse IMM args
-        elif form == "IMM":
-
-            # Two arguments
-            if len(args) > 1:
-                return parse_val(args[0], 8)[0] + parse_reg(args[1])
-
-            # Throw error if one argument
-            else:
-                error(0, line)
-                exit()
-
-        # Parse BRA args
-        else:
-            return parse_val(args[0], 11)[0]
-
-    else:
-        error(0, line)
+    # Throw error if no arguments
+    if len(line) <= 1:
+        error(0, line[0])
         exit()
+
+    # Split and strip arguments
+    args = line[1].split(',',1)
+    for i in range(len(args)):
+        args[i] = args[i].strip()
+
+    print(args)
+    
+    # Parse ALU and MOV args
+    if form == "ALU" or form == "MOV":
+
+        # One argument
+        if len(args) == 1:
+            return parse_reg(args[0]) + parse_reg(args[0])
+        
+        # Two arguments
+        else:
+            return parse_reg(args[0]) + parse_reg(args[1])
+
+    # Parse IMM args
+    elif form == "IMM":
+
+        # Two arguments
+        if len(args) > 1:
+            return parse_val(args[0], 8)[0] + parse_reg(args[1])
+
+        # Throw error if one argument
+        else:
+            error(0, line)
+            exit()
+
+    # Parse BRA args
+    else:
+        return parse_val(args[0], 11)[0]
 
 
 # Parse register names
@@ -314,7 +363,21 @@ def parse_val(val: str, bits: int) -> tuple:
 
 # Error codes
 def error(error_num, text):
-    print(error_msg[error_num] + " on line " + str(linenum) +", \n\"" + text+ "\"")
+    print("\n" + error_msg[error_num] + " on line " + str(line_num) +", \n\"" + text+ "\"")
+
+
+# Dump symbol table entries
+def dump_table(labels):
+    header = ["Number", "Line", "Label", "Address"]
+    index = 0
+    print("\n{: <20} {: <20} {: <20} {: <20}\n".format(*header))
+
+    # Step through entries
+    for label in labels:
+        row =[index, labels[label][0], label, labels[label][1]]
+        print("{: <20} {: <20} {: <20} {: <20}".format(*row))
+
+        index += 1
 
 
 # Run main function
