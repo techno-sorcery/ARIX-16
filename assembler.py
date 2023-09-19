@@ -1,19 +1,20 @@
-# ARIX-16 Cross Assemble
+# ARIX-16 Cross Assembler
 # Written by Hayden Buscher, 2023
 
-# import re
 import os
 import math
+from datetime import datetime
 
 # Constants
 op_alu = { "inc":"00000100", "dec":"00001000", "add":"00001100", "adc":"00010000", "sub":"00010100",
            "sbb":"00011000", "and":"00011100", "or":"00100000",  "xor":"00100100", "not":"00101000",
-           "lsh":"00101100", "lrt":"00110000" }
-op_imm = { "ldi":"0100", "ldih":"0101" }
+           "lsh":"00101100", "lrt":"00110000", "cmp":"00110100" }
+op_imm = { "ldi":"0100", "ldh":"0101", "ldl":"0110" }
 op_mov = { "mov":"10000000", "swp":"10001000", "ldm":"10010000", "lds":"10011000", "ldp":"10100000",
            "stb":"10000001", "stm":"10000010", "sts":"10000011", "jmp":"10000100" }
-op_bra = { "jre":"11000", "bin":"11001", "bic":"11010", "bie":"11011",
-           "bnn":"11101", "bnc":"11110", "bne":"11111" }
+op_bra = { "jre":"110000", "bie":"110001", "bne":"110010", "big":"110011", "bil":"110100", "bge":"110101",
+           "ble":"110110", "bic":"110111", "bnc":"111000", "bin":"111001", "bnn":"111010", "biv":"111011",
+           "bnv":"111100", "nop":"111101"}
 
 op_regs = { "r0":"0000",  "r1":"0001",  "r2":"0010",  "r3":"0011", 
             "r4":"0100",  "r5":"0101",  "r6":"0110",  "r7":"0111", 
@@ -27,39 +28,104 @@ op_regs = { "r0":"0000",  "r1":"0001",  "r2":"0010",  "r3":"0011",
 
 dir_def = { ".byte":8, ".word":16, ".double":32, ".quad":64 }
 dir_res = { ".resb":0.5, ".resw":1, ".resd":2,  ".resq":4 }
-dir_misc = [ ".org", ".equ", ".seg" ]
+dir_misc = [ ".org", ".equ", ".seg", ".macro", ".end"]
 
 error_msg = [ "Too few arguments", "Invalid register", "Invalid argument", "Oversized argument", 
-              "Invalid label name", "Duplicate label", "Invalid data type" ]
+              "Invalid label name", "Duplicate label", "Invalid data type", "Invalid instruction" ]
 
 width = 16
+rel_width = 10
 page = 2048
+version = "1.0"
 
 # Global variables
-labels = {}
-abs_num = 0
-rel_num = 0
-line_num = 0
-
-
-# File management
-path = "test.asm"
+listing = True
 
 def main():
-    global labels
-    global abs_num
-    global rel_num
+    global full_line
     global line_num
+    global symtable
+    global rel_num
 
+    path = "test.asm"
+    full_line = ""
+
+    symtable = {}
+    macros = {}
+
+    macmode = ""
+
+    rel_num = 0
+    line_num = 1
+
+    seg_id = "None"
+    seg_base = 0
+
+    # Listing header
+    if listing:
+        print("ARIX-16 Cross Assembler, v" + version)
+        print("File: " + path)
+        print("Date: " + datetime.now().strftime("%m/%d/%Y, %H:%M:%S"))
+        print("\n")
+
+    # First pass header
+    if listing:
+        header = ["Number", "Label", "Line", "Hex", "Dec", "Segment"]
+
+        print("--- Pass 1, Symbol table ---")
+        print("\n{: <10} {: <20} {: <8} {: <8} {: <10} {: <10}\n".format(*header))
+
+    # First pass, generate symbol table
     with open (path) as file:
-
-        # Reset vars
-        abs_num = 0
-        rel_num = 0
-        line_num = 0
-
-        # First pass, generate symbol table
         for line in file:
+
+            # Remove leading/trailing spaces and comments, and replace tabs
+            line = line.replace("\;","a16-placeholder=semicolon")
+            line = line.split(';', 1)[0].strip()
+            line = line.replace("a16-placeholder=semicolon",";").expandtabs()
+
+            full_line = line
+
+            # Ignore if blank
+            if len(line) != 0:
+                len_orig = len(symtable)
+                parsed = parse_line(1, 0, line, rel_num, symtable, seg_id, seg_base, macros, macmode)
+
+                rel_num = parsed[0]
+                symtable = parsed[1]
+                seg_id = parsed[2]
+                seg_base = parsed[3]
+                macros = parsed[5]
+                macmode = parsed[6]
+
+
+                # Print last symtable entry
+                if listing and len_orig < len(parsed[1]):
+                    label = list(parsed[1])[-1]
+                    val_hex = format(int(parse_val(str(symtable[label]),width)[0],2), "04X")
+                    row = [len_orig + 1, label, line_num, val_hex, symtable[label], seg_id]
+
+                    print("{: ^10} {: <20} {: <8} {: <8} {: <10} {: <10}".format(*row))
+
+            line_num += 1
+
+    # Second pass header 
+    if listing:
+        header = ["Address", "Data", "Line", "Text"]
+
+        print("\n\n--- Pass 2, Assembly ---")
+        print("\n{: <10} {: <22} {: <8} {: <10}\n".format(*header))
+
+    # Reset counters
+    rel_num = 0
+    line_num = 1
+
+    # Second pass, fill symbols, parse instructions, and generate hex
+    with open (path) as file:
+        for line in file: 
+            full_line = line.strip("\n")
+            rel_old = rel_num
+            data = [""]
 
             # Remove leading/trailing spaces and comments, and replace tabs
             line = line.replace("\;","a16-placeholder=semicolon")
@@ -68,78 +134,189 @@ def main():
 
             # Ignore if blank
             if len(line) != 0:
-                print(line)
-                pass_first(line)
+                parsed = parse_line(2, 0, line, rel_num, {}, seg_id, seg_base, macros, macmode)
+
+                rel_num = parsed[0]
+                data = parsed[4]
+
+            # Print assembled code
+            print_data(rel_old, data)
 
             line_num += 1
 
-        # Dump symbol table
-        dump_table(labels)
+
+# Print assembled code
+def print_data(rel_old, data):
+    if listing:
+        data_form = [""]
+
+        # Format data by rows
+        for val in data:
+
+            # Create new row if width exceeded
+            if len(data_form[-1]) >= 20:
+                data_form.append("")
+
+            # Format data if not blank
+            if val != "":
+                data_form [-1] += format(int(val,2), "04X") + " "
+            
+        first_line = True
+
+        # Print rows
+        for data in data_form:
+
+            # First line
+            if first_line:
+                if data != "":
+                    row = [format(rel_old, "04X"), data, line_num, full_line]
+                else:
+                    row = ["", "", line_num, full_line]
+
+                first_line = False
+
+            # Successive lines
+            else:
+                row = ["", data, "", ""]
+
+            print("{: ^10} {: <22} {: <8} {: <10}".format(*row))
 
 
-# First pass
-def pass_first(line) -> None:
-    global rel_num
+# Line parsing for both passes
+def parse_line(pass_num, loop, line, rel_num, symtable, seg_id, seg_base, macros, macmode) -> tuple:
+    data = [""]
 
     # Split line on first space, make lowercase
     line = line.split(' ', 1)
     op = line[0].lower()
 
-    # Increment if instruction
+    # Parse instruction
     if op in op_alu or op in op_imm or op in op_mov or op in op_bra:
+
+        # Parse if second pass
+        if pass_num == 2:
+
+            # Throw error if no arguments
+            if len(line) <= 1:
+                error(0)
+                exit()
+
+            data = [parse_op(op, line[1].strip())]
+        
+        # Increment relative address
         rel_num += 1
+
 
     # Parse directives
     elif op in dir_res or op in dir_def or op in dir_misc:
 
         # Throw error if no arguments
         if len(line) <= 1:
-            error(0, line[0])
+            error(0)
             exit()
 
-        rel_num = parse_dir(op, line[1].strip(), rel_num)
+        parsed = parse_dir(op, line[1].strip(), rel_num, symtable, seg_id, seg_base, macros, macmode)
 
-    # Parse labels
-    else:
-        parse_label(op)
+        rel_num = parsed[0]
+        symtable = parsed[1]
+        seg_id = parsed[2]
+        seg_base = parsed[3]
+        data = parsed[4]
+        macros = parsed[5]
+        macmode = parsed[6]
+
+    # Parse symbols
+    elif loop == 0:
+    
+        # Add to symtable if first pass
+        if pass_num == 1:
+            symtable = parse_symbol(op, rel_num, symtable)
 
         # Continue parsing if not empty
         if len(line) > 1:
-            pass_first(line[1].strip())
+            parsed = parse_line(pass_num, 1, line[1].strip(), rel_num, symtable, seg_id, seg_base, macros, macmode)
 
+            rel_num = parsed[0]
+            symtable = parsed[1]
+            seg_id = parsed[2]
+            seg_base = parsed[3]
+            data = parsed[4]
+            macros = parsed[5]
+            macmode = parsed[6]
 
-# Parse labels
-def parse_label(label) -> None:
-
-    # Check if valid, non-duplicate label
-    if not label[0].isalpha():
-        error(4,label)
+    # Throw error if invalid instruction
+    else:
+        error(7)
         exit()
 
-    if label in labels:
-        error(5,label)
+    return (rel_num, symtable, seg_id, seg_base, data, macros, macmode)
+
+
+# Parse opcodes
+def parse_op(op, args):
+
+    # ALU instructions
+    if op in op_alu:
+        return op_alu[op] + parse_args("ALU", args)
+
+    # IMM instructions
+    elif op in op_imm:
+        return op_imm[op] + parse_args("IMM", args)
+
+    # MOV instructions
+    elif op in op_mov:
+        return op_mov[op] + parse_args("MOV", args)
+
+    # BRA instructions
+    else:
+        return op_bra[op] + parse_args("BRA", args)
+
+
+# Write to output file
+def file_out(bin) -> None:
+    # print(bin)
+    a = 1
+
+
+# Parse symtable
+def parse_symbol(name, val, symtable) -> list:
+
+    # Check if valid, non-duplicate label
+    if not name[0].isalpha():
+        error(4)
+        exit()
+
+    if name in symtable:
+        error(5)
         exit()
 
     # Add label to symbol table
-    labels[label] = [line_num, rel_num]
+    symtable[name] = parse_val(str(val), width)[1]
+
+    return symtable
 
 
 # Parse directives 
-def parse_dir(op, args, rel_num) -> int:
+def parse_dir(op, args, rel_num, symtable, seg_id, seg_base, mactable, macmode) -> tuple:
+    data = []
 
     # Parse def directives
     if op in dir_def:
-        vals = parse_def(op, args) 
+        data = parse_def(op, args) 
 
         # rel_num offset
-        rel_num += len(vals)
+        rel_num += len(data)
     
     # Parse res directives
     elif op in dir_res:
         arg = parse_val(args, width)[1]
 
-        # rel_num offset
-        rel_num += int(math.ceil(dir_res[op] * arg))
+        # Calculate offset
+        word_num = int(math.ceil(dir_res[op] * arg))
+
+        # Create blank data, add to rel_num
+        data = ["0"] * word_num
+        rel_num += word_num
 
     # Parse org directive
     elif op == ".org":
@@ -147,55 +324,23 @@ def parse_dir(op, args, rel_num) -> int:
 
     # Parse equ directive
     elif op == ".equ":
-        parse_equ(args)
+        symtable = parse_equ(args, symtable)
 
     # Parse seg directive
     elif op == ".seg":
-        rel_num = parse_seg(args)
+        parsed = parse_seg(args, rel_num, symtable, seg_id, seg_base)
 
-    return rel_num
+        rel_num = 0
+        seg_id = parsed[0]
+        seg_base = parsed[1]
+        symtable = parsed[2]
 
+    # Parse macro directive
+    elif op == ".macro":
+        macmode = True
+        
 
-# Parse seg directive
-def parse_seg(args) -> int:
-    # args = args.split(',')
-    # alignment = 0
-
-    # # Throw error if no args
-    # if len(args) == 0:
-    #     error(0, args)
-    #     exit()
-
-    # # Two args
-    # if len(args >= 2):
-
-    #     # Set alignment
-    #     alignment = args[1]
-
-    # # Create label
-    # parse_label(args[0])
-    # # labels[]
-    
-    return 0
-
-
-# Parse equ directive
-def parse_equ(args) -> None:
-    args = args.split(',')
-
-    # Throw error if less than two args
-    if len(args) < 2:
-        error(0, args)
-        exit()
-
-    # Extract arguments
-    arg = parse_val(args[0].strip(), width)[1]
-    label = args[1].strip()
-
-    # Create label, and set to arg
-    parse_label(label)
-    labels[label][1] = arg
-
+    return (rel_num, symtable, seg_id, seg_base, data, mactable, macmode)
 
 
 # Parse def directives
@@ -245,61 +390,63 @@ def def_words(val, vals, bits):
     return vals
 
 
-# Parse opcodes
-def parse_op(line):
+# Parse seg directive
+def parse_seg(args, rel_num, symtable, seg_id, seg_base) -> tuple:
+    alignment = 1
+    args = args.split(',')
 
-    # Remove leading/trailing spaces, and split
-    line = line.strip().split(' ',1)
+    # No offset for first segment, by default
+    if seg_id == "None":
+        alignment = 0
 
-    line_op = line[0].lower()
-    op_word = ""
+    # Throw error if no args
+    if len(args) == 0:
+        error(0)
+        exit()
 
-    print(line)
-    
-    # ALU instructions
-    if line_op in op_alu:
-        op_word = op_alu[line_op] + parse_args(line, "ALU")
+    # Two args
+    if len(args) >= 2:
 
-    # IMM instructions
-    elif line_op in op_imm:
-        op_word = op_imm[line_op] + parse_args(line, "IMM")
+        # Set alignment
+        alignment = int(args[1])
 
-    # MOV instructions
-    elif line_op in op_mov:
-        op_word = op_mov[line_op] + parse_args(line, "MOV")
+    # Set id, base address, and label
+    seg_id = args[0]
+    seg_base = (((seg_base + rel_num) // page) + alignment) * page
+    symtable = parse_symbol(args[0], seg_base // (2 ** 11), symtable)
 
-    # BRA instructions
-    elif line_op in op_bra:
-        op_word = op_bra[line_op] + parse_args(line, "BRA")
+    return (seg_id, seg_base, symtable)
 
-    # Labels
-    else:
-        labels[line_op] = 0
-        
-        # Continue parsing if more commands
-        if len(line) > 1:
-            parse_op(line[1])
 
-    print(op_word)
+# Parse equ directive
+def parse_equ(args, symtable) -> list:
+    args = args.split(',')
+
+    # Throw error if less than two args
+    if len(args) < 2:
+        error(0)
+        exit()
+
+    # Extract arguments
+    name = args[0].strip()
+    arg = parse_val(args[1].strip(), width)[1]
+
+    # Create label, and set to arg
+    symtable = parse_symbol(name, arg, symtable)
+
+    return symtable
 
 
 # Parse opcode arguments
-def parse_args(line: list, form: str) -> str:
-
-    # Throw error if no arguments
-    if len(line) <= 1:
-        error(0, line[0])
-        exit()
+def parse_args(op, args) -> str:
 
     # Split and strip arguments
-    args = line[1].split(',',1)
+    args = args.split(',',1)
     for i in range(len(args)):
         args[i] = args[i].strip()
-
-    print(args)
     
     # Parse ALU and MOV args
-    if form == "ALU" or form == "MOV":
+    if op == "ALU" or op == "MOV":
 
         # One argument
         if len(args) == 1:
@@ -307,23 +454,23 @@ def parse_args(line: list, form: str) -> str:
         
         # Two arguments
         else:
-            return parse_reg(args[0]) + parse_reg(args[1])
+            return parse_reg(args[1]) + parse_reg(args[0])
 
     # Parse IMM args
-    elif form == "IMM":
+    elif op == "IMM":
 
         # Two arguments
         if len(args) > 1:
-            return parse_val(args[0], 8)[0] + parse_reg(args[1])
+            return parse_val(args[1], 8)[0] + parse_reg(args[0]) 
 
         # Throw error if one argument
         else:
-            error(0, line)
+            error(0)
             exit()
 
     # Parse BRA args
     else:
-        return parse_val(args[0], 11)[0]
+        return parse_val(args[0], rel_width)[0]
 
 
 # Parse register names
@@ -331,55 +478,88 @@ def parse_reg(reg: str) -> str:
     if reg in op_regs:
         return op_regs[reg]
     else:
-        error(1, reg)
+        error(1)
         exit()
 
 
 # Parse numerical values
 def parse_val(val: str, bits: int) -> tuple:
     val_dec = 0 
-    val_bin = "0"
+    temp_bits = bits
+    mod = ""
     
     # Char
     if (val.startswith('\'') and val.endswith('\'')) and len(val) == 3:
         val_dec = ord(val[1])
 
-    # Number
     else:
-        try:
-            val_dec = int(val,0)
 
-        except:
-            error(2, val)
-            exit()
+        # Extract modifier
+        args = val.split(".")
+        val = args[0]
+
+        # Symbol
+        if val in symtable:
+
+            # Set modifier if present
+            if len(args) > 1:
+                mod = args[1].lower()
+
+            # Adjust bit width
+            if mod == "hi" or mod == "lo":
+                bits = width
+
+            # Read value from symtable
+            if mod == "rel":
+                    val_dec = symtable[val] - rel_num
+                    bits = rel_width
+            else:
+                val_dec = symtable[val]
+
+        # Number
+        else:
+
+            # Convert to decimal
+            try:
+                val_dec = int(val,0)
+
+            # Throw error if invalid format
+            except:
+                error(2)
+                exit()
+
+    # Binary string conversion, negative
+    if val_dec < 0:
+        val_2c = ~(val_dec + 1)
+        val_bin = format(val_2c, "1=" + str(bits) + "b")
+
+    # Binary string conversion, positive
+    else:
+        val_bin = format(val_dec, "0" + str(bits) + "b")
+
+    # Parse modifiers
+    if mod == "hi":
+        val_bin = val_bin[0:width // 2]
+        
+    elif mod == "lo":
+        val_bin = val_bin[width // 2 : width]
+
+    bits = temp_bits
 
     # Check if too long
-    if val_dec >= 2**bits:
-        error(3, val)
+    if len(val_bin) > bits:
+        error(3)
         exit()
 
-    return (format(val_dec, "0" + str(bits) + "b"), val_dec)
+    return (val_bin, val_dec)
 
 
 # Error codes
-def error(error_num, text):
-    print("\n" + error_msg[error_num] + " on line " + str(line_num) +", \n\"" + text+ "\"")
-
-
-# Dump symbol table entries
-def dump_table(labels):
-    header = ["Number", "Line", "Label", "Address"]
-    index = 0
-    print("\n{: <20} {: <20} {: <20} {: <20}\n".format(*header))
-
-    # Step through entries
-    for label in labels:
-        row =[index, labels[label][0], label, labels[label][1]]
-        print("{: <20} {: <20} {: <20} {: <20}".format(*row))
-
-        index += 1
+def error(error_num):
+    print("\n" + error_msg[error_num] + " on line " + str(line_num) +", \n\"" + full_line.strip() + "\"")
 
 
 # Run main function
 if __name__ == "__main__":
     main()
+

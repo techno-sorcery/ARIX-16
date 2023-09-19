@@ -9,8 +9,29 @@ IMM     | 01 | x   | x   | xxxx xxxx | xxxx |
         | OP | RD  | RW  | SRC  | DEST |
 MOV     | 10 | xxx | xxx | xxxx | xxxx |
 
-        | OP | CON | OFFSET        |
-BRA     | 11 | xxx | xxx xxxx xxxx |
+        | OP | CON  | OFFSET       |
+BRA     | 11 | xxxx | xx xxxx xxxx |
+
+
+Conditions
+
+JRE         Always execute
+BIE         E == 1
+BNE         E == 0
+
+BIG         Z == 0 AND N == V
+BIL         N != V
+BGE         N == V
+BLE         Z == 1 OR N != V
+
+BIC         C == 1
+BNC         C == 0
+
+BIN         N == 1
+BNN         N != 1
+
+BIV         V == 1
+BNV         V != 1
 
 
 Registers

@@ -1,23 +1,5 @@
-; This is a tes.seg directivet
-        ; ldi 0xA, a0
-        ; sub a1,a2
-; menu
-    ; ldi 't', a1
-    ; add a0, a1      ; More comments!
-
-    ; org  0xF
-
-; test  
-    ; jre 0x3FF
-    ; jre menu
-
-; mytext  db "test!", 'c', 0xFE, 123
-        ; dw "test!", 'c', 0xFE, 123
-
-; var     resw    5
-; var2    resb    5
-        ; equ 5 var2
-
+;blah
+;test 123!
 .seg data
 var  .byte   "test", 0, 'c'
 var2 .word   "test", 0, 'c'
@@ -28,8 +10,23 @@ var2 .word   "test", 0, 'c'
      .resw   5
      .resd   5
      .resq   5
-     .equ    10, myconst
+     .equ    myconst,-15
+     .equ    large,48203
+
+.macro ldi16,val,reg
+    ldh reg,val.hi
+    ldl reg,val.lo
+.end
 
 .seg text, 2
-
-add 
+loop
+    ldi a1,30
+    ldi a2,10
+    nop 0
+    add a1,a2
+    ldi a2,myconst
+    inc sp
+    ldi a1,'>'
+    ldh a2,large.hi
+    ldl a2,large.lo
+    jre loop.rel
